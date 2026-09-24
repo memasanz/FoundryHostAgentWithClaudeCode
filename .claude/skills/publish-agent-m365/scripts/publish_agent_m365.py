@@ -74,6 +74,8 @@ def parse_args():
                    help="Skip the Foundry account public-network-access check before the PATCH.")
     p.add_argument("--check-bot", action="store_true",
                    help="Only report current agent M365 config + any Bot Service already associated, then exit.")
+    p.add_argument("--scan-subscription", action="store_true",
+                   help="Scan the whole subscription for an associated Bot Service instead of just the resource group.")
     p.add_argument("--only", default="identity,bicep,patch,publish",
                    help="Comma list of steps to run: identity,bicep,patch,publish")
     p.add_argument("--no-prompt", action="store_true",
@@ -148,8 +150,11 @@ def resolve_config(a, token):
     a.endpoint = prompt(a, "Project endpoint (https://<res>.services.ai.azure.com/api/projects/<proj>)",
                         a.endpoint, required=True)
     a.endpoint = a.endpoint.rstrip("/")
+    # Resource group is optional only for a subscription-wide --check-bot scan;
+    # it is still required to create the Bot Service or check network posture.
+    rg_required = not (a.check_bot and getattr(a, "scan_subscription", False))
     a.resource_group = prompt(a, "Resource group (contains the Foundry resource)",
-                              a.resource_group, required=True)
+                              a.resource_group, required=rg_required)
     a.agent_name = choose_agent(a, token)
     if a.check_bot:
         return
@@ -195,6 +200,8 @@ def network_posture(a):
     the enable_m365_public_endpoint PATCH is required.
     """
     if a.dry_run:
+        return (None, True, False)
+    if not a.resource_group:
         return (None, True, False)
     name = account_name(a)
     out = run_az([
@@ -244,16 +251,22 @@ def step_identity(a, token):
 
 
 def list_bots(a):
-    """List Bot Service resources in the resource group as (armId, endpoint, msaAppId).
+    """List Bot Service resources as (armId, endpoint, msaAppId).
 
-    Uses the ARM provider API via `az rest` because `az resource list` does not
-    reliably index Microsoft.BotService resources.
+    Scans the whole subscription when `--scan-subscription` is set (or no resource
+    group is known), otherwise just the resource group. Uses the ARM provider API
+    via `az rest` because `az resource list` does not reliably index
+    Microsoft.BotService resources.
     """
     sub = run_az(["account", "show", "--query", "id", "-o", "tsv"], check=False)
     if not sub:
         return []
-    url = (f"https://management.azure.com/subscriptions/{sub}/resourceGroups/"
-           f"{a.resource_group}/providers/Microsoft.BotService/botServices?api-version=2022-09-15")
+    if getattr(a, "scan_subscription", False) or not a.resource_group:
+        scope = f"subscriptions/{sub}"
+    else:
+        scope = f"subscriptions/{sub}/resourceGroups/{a.resource_group}"
+    url = (f"https://management.azure.com/{scope}"
+           f"/providers/Microsoft.BotService/botServices?api-version=2022-09-15")
     out = run_az(["rest", "--method", "get", "--url", url, "--query", "value", "-o", "json"], check=False)
     if not out:
         return []
@@ -302,10 +315,12 @@ def check_association(a, token):
     else:
         print("    Could not determine (need reader on the Foundry account); PATCH assumed required.")
 
-    if not a.resource_group:
-        print("    (Set RESOURCE_GROUP to scan for an associated Bot Service.)")
+    scan_sub = getattr(a, "scan_subscription", False)
+    if not a.resource_group and not scan_sub:
+        print("    (Set a resource group, or pass --scan-subscription, to scan for an associated Bot Service.)")
         return
-    print(f"--- Scanning Bot Services in {a.resource_group} for '{a.agent_name}' ---")
+    scope_label = "the subscription" if (scan_sub or not a.resource_group) else f"resource group '{a.resource_group}'"
+    print(f"--- Scanning Bot Services across {scope_label} for '{a.agent_name}' ---")
     if a.dry_run:
         return
     match, bots = find_associated_bot(a, client_id)
@@ -317,7 +332,7 @@ def check_association(a, token):
         print(f"      msaAppId: {msa}  (matches agent: {msa == client_id})")
         print(f"      Reuse it with:  --skip-bicep --bot-arm-id {bid}")
     else:
-        print(f"    No Bot Service in this resource group is associated with this agent "
+        print(f"    No Bot Service in {scope_label} is associated with this agent "
               f"({len(bots)} bot(s) scanned).")
 
 

@@ -29,7 +29,8 @@ def base_args(**overrides):
         short_description=None, full_description=None, developer_name=None,
         developer_website_url=None, privacy_url=None, terms_of_use_url=None,
         bot_arm_id=None, skip_bicep=False, force_bicep=False, force_patch=False,
-        no_network_check=False, check_bot=False, only="identity,bicep,patch,publish",
+        no_network_check=False, check_bot=False, scan_subscription=False,
+        only="identity,bicep,patch,publish",
         no_prompt=False, dry_run=False,
     )
     for k, v in overrides.items():
@@ -241,6 +242,39 @@ class NetworkPostureTests(unittest.TestCase):
         self.assertIsNone(pna)
         self.assertTrue(restricted)   # safe default: assume PATCH required
         self.assertFalse(resolved)
+
+
+class ListBotsScopeTests(unittest.TestCase):
+    def _url_for(self, **overrides):
+        kwargs = dict(resource_group="rg-test")
+        kwargs.update(overrides)
+        a = base_args(**kwargs)
+        captured = {}
+
+        def fake_run_az(args, dry_run=False, check=True):
+            if args[:2] == ["account", "show"]:
+                return "sub-123"
+            captured["cmd"] = args
+            return "[]"
+
+        with mock.patch.object(mod, "run_az", fake_run_az):
+            mod.list_bots(a)
+        # The ARM URL is the value right after "--url".
+        cmd = captured["cmd"]
+        return cmd[cmd.index("--url") + 1]
+
+    def test_default_scans_resource_group(self):
+        url = self._url_for()
+        self.assertIn("/resourceGroups/rg-test/", url)
+
+    def test_scan_subscription_omits_resource_group(self):
+        url = self._url_for(scan_subscription=True)
+        self.assertNotIn("/resourceGroups/", url)
+        self.assertIn("/subscriptions/sub-123/providers/Microsoft.BotService", url)
+
+    def test_missing_resource_group_falls_back_to_subscription(self):
+        url = self._url_for(resource_group=None)
+        self.assertNotIn("/resourceGroups/", url)
 
 
 class AgentPickerTests(unittest.TestCase):

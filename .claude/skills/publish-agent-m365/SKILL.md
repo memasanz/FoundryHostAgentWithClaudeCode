@@ -71,6 +71,14 @@ matches the agent identity:
 python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --check-bot
 ```
 
+By default the scan is scoped to the **resource group**. To search the **whole subscription**
+instead (e.g. when the bot may live in a different RG than the Foundry resource), add
+`--scan-subscription` — the resource group prompt then becomes optional:
+
+```bash
+python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --check-bot --scan-subscription
+```
+
 If a bot is found, reuse it instead of creating a duplicate:
 
 ```bash
