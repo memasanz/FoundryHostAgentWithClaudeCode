@@ -74,8 +74,8 @@ def parse_args():
                    help="Skip the Foundry account public-network-access check before the PATCH.")
     p.add_argument("--check-bot", action="store_true",
                    help="Only report current agent M365 config + any Bot Service already associated, then exit.")
-    p.add_argument("--scan-subscription", action="store_true",
-                   help="Scan the whole subscription for an associated Bot Service instead of just the resource group.")
+    p.add_argument("--scan-resource-group", action="store_true",
+                   help="Limit the Bot Service search to --resource-group only (default scans the whole subscription).")
     p.add_argument("--only", default="identity,bicep,patch,publish",
                    help="Comma list of steps to run: identity,bicep,patch,publish")
     p.add_argument("--no-prompt", action="store_true",
@@ -150,9 +150,9 @@ def resolve_config(a, token):
     a.endpoint = prompt(a, "Project endpoint (https://<res>.services.ai.azure.com/api/projects/<proj>)",
                         a.endpoint, required=True)
     a.endpoint = a.endpoint.rstrip("/")
-    # Resource group is optional only for a subscription-wide --check-bot scan;
+    # Resource group is optional for --check-bot (the default scan is subscription-wide);
     # it is still required to create the Bot Service or check network posture.
-    rg_required = not (a.check_bot and getattr(a, "scan_subscription", False))
+    rg_required = not a.check_bot
     a.resource_group = prompt(a, "Resource group (contains the Foundry resource)",
                               a.resource_group, required=rg_required)
     a.agent_name = choose_agent(a, token)
@@ -253,18 +253,19 @@ def step_identity(a, token):
 def list_bots(a):
     """List Bot Service resources as (armId, endpoint, msaAppId).
 
-    Scans the whole subscription when `--scan-subscription` is set (or no resource
-    group is known), otherwise just the resource group. Uses the ARM provider API
-    via `az rest` because `az resource list` does not reliably index
+    Scans the whole subscription by default; pass `--scan-resource-group` to
+    limit the search to `--resource-group`. Uses the ARM provider API via
+    `az rest` because `az resource list` does not reliably index
     Microsoft.BotService resources.
     """
     sub = run_az(["account", "show", "--query", "id", "-o", "tsv"], check=False)
     if not sub:
         return []
-    if getattr(a, "scan_subscription", False) or not a.resource_group:
-        scope = f"subscriptions/{sub}"
-    else:
+    rg_scope = getattr(a, "scan_resource_group", False) and a.resource_group
+    if rg_scope:
         scope = f"subscriptions/{sub}/resourceGroups/{a.resource_group}"
+    else:
+        scope = f"subscriptions/{sub}"
     url = (f"https://management.azure.com/{scope}"
            f"/providers/Microsoft.BotService/botServices?api-version=2022-09-15")
     out = run_az(["rest", "--method", "get", "--url", url, "--query", "value", "-o", "json"], check=False)
@@ -315,11 +316,11 @@ def check_association(a, token):
     else:
         print("    Could not determine (need reader on the Foundry account); PATCH assumed required.")
 
-    scan_sub = getattr(a, "scan_subscription", False)
-    if not a.resource_group and not scan_sub:
-        print("    (Set a resource group, or pass --scan-subscription, to scan for an associated Bot Service.)")
-        return
-    scope_label = "the subscription" if (scan_sub or not a.resource_group) else f"resource group '{a.resource_group}'"
+    rg_scope = getattr(a, "scan_resource_group", False) and a.resource_group
+    if rg_scope:
+        scope_label = f"resource group '{a.resource_group}'"
+    else:
+        scope_label = "the subscription"
     print(f"--- Scanning Bot Services across {scope_label} for '{a.agent_name}' ---")
     if a.dry_run:
         return

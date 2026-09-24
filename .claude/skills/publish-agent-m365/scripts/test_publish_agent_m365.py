@@ -29,7 +29,7 @@ def base_args(**overrides):
         short_description=None, full_description=None, developer_name=None,
         developer_website_url=None, privacy_url=None, terms_of_use_url=None,
         bot_arm_id=None, skip_bicep=False, force_bicep=False, force_patch=False,
-        no_network_check=False, check_bot=False, scan_subscription=False,
+        no_network_check=False, check_bot=False, scan_resource_group=False,
         only="identity,bicep,patch,publish",
         no_prompt=False, dry_run=False,
     )
@@ -263,17 +263,17 @@ class ListBotsScopeTests(unittest.TestCase):
         cmd = captured["cmd"]
         return cmd[cmd.index("--url") + 1]
 
-    def test_default_scans_resource_group(self):
+    def test_default_scans_subscription(self):
         url = self._url_for()
-        self.assertIn("/resourceGroups/rg-test/", url)
-
-    def test_scan_subscription_omits_resource_group(self):
-        url = self._url_for(scan_subscription=True)
         self.assertNotIn("/resourceGroups/", url)
         self.assertIn("/subscriptions/sub-123/providers/Microsoft.BotService", url)
 
-    def test_missing_resource_group_falls_back_to_subscription(self):
-        url = self._url_for(resource_group=None)
+    def test_scan_resource_group_limits_to_rg(self):
+        url = self._url_for(scan_resource_group=True)
+        self.assertIn("/resourceGroups/rg-test/", url)
+
+    def test_scan_resource_group_without_rg_falls_back_to_subscription(self):
+        url = self._url_for(scan_resource_group=True, resource_group=None)
         self.assertNotIn("/resourceGroups/", url)
 
 

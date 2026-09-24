@@ -39,6 +39,10 @@ Reference doc:
 The workflow is automated by [`scripts/publish_agent_m365.py`](scripts/publish_agent_m365.py), which
 uses [`scripts/bot_service.bicep`](scripts/bot_service.bicep) for the Bot Service resource.
 
+> **Prefer a notebook?** [`publish_agent_m365.ipynb`](publish_agent_m365.ipynb) walks the same
+> 5-step flow one cell at a time (it reuses the script's tested functions). It defaults to
+> `DRY_RUN = True` so you can review every request before anything is created.
+
 ### 1. Inputs (the script asks you — no environment variables)
 
 Just run the script; it **prompts interactively** for every value, shows a default in `[brackets]`
@@ -64,19 +68,18 @@ For automation/CI, pass `--no-prompt` to use flags + defaults without any intera
 Before creating a new bot, see whether one is already associated with the agent. This reports the
 agent's current M365 endpoint config (protocols, auth schemes, `enable_m365_public_endpoint`), the
 **Foundry account's `publicNetworkAccess`** (so you know whether the PATCH is even required), and
-scans the resource group for a Bot Service whose `endpoint` targets the agent or whose `msaAppId`
-matches the agent identity:
+scans the **whole subscription** for a Bot Service whose `endpoint` targets the agent or whose
+`msaAppId` matches the agent identity:
 
 ```bash
 python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --check-bot
 ```
 
-By default the scan is scoped to the **resource group**. To search the **whole subscription**
-instead (e.g. when the bot may live in a different RG than the Foundry resource), add
-`--scan-subscription` — the resource group prompt then becomes optional:
+The scan is **subscription-wide by default** (so a bot in a different RG than the Foundry resource
+is still found). To limit it to a single resource group, add `--scan-resource-group`:
 
 ```bash
-python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --check-bot --scan-subscription
+python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --check-bot --scan-resource-group
 ```
 
 If a bot is found, reuse it instead of creating a duplicate:
@@ -98,7 +101,6 @@ python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --dry-run
 ```bash
 python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py
 ```
-
 The script runs, in order:
 
 1. **Get identity** — `GET {endpoint}/agents/{name}` → `instance_identity.client_id`; tenant via `az account show`.
