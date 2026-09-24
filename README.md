@@ -366,8 +366,9 @@ python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py
 ```
 
 > **Prefer a notebook?** `.claude/skills/publish-agent-m365/publish_agent_m365.ipynb` walks the
-> same 5-step flow one cell at a time (reusing the script's tested functions) and defaults to
-> `DRY_RUN = True`, so you can review each request before anything is created.
+> same 5-step flow one cell at a time with **every HTTP request written out explicitly** (URL,
+> headers, JSON body, raw response) — no abstraction. It defaults to `DRY_RUN = True`, so the
+> mutating cells print the exact request without sending it.
 
 > **Scope ↔ auth must match:** `Shared`/`Personal` → `BotServiceRbac` (you only, share by link,
 > no admin approval); `Tenant` → `BotServiceTenant` (whole tenant, after M365 admin approval).

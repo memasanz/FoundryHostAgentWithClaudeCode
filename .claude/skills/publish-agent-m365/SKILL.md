@@ -40,8 +40,9 @@ The workflow is automated by [`scripts/publish_agent_m365.py`](scripts/publish_a
 uses [`scripts/bot_service.bicep`](scripts/bot_service.bicep) for the Bot Service resource.
 
 > **Prefer a notebook?** [`publish_agent_m365.ipynb`](publish_agent_m365.ipynb) walks the same
-> 5-step flow one cell at a time (it reuses the script's tested functions). It defaults to
-> `DRY_RUN = True` so you can review every request before anything is created.
+> 5-step flow one cell at a time with **every HTTP request written out explicitly** (URL, headers,
+> JSON body, raw response) — no helper-function abstraction. It defaults to `DRY_RUN = True` so the
+> mutating cells print the exact request without sending it.
 
 ### 1. Inputs (the script asks you — no environment variables)
 
