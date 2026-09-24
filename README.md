@@ -253,6 +253,127 @@ End users **Add** the agent from Teams/Copilot (Apps → *Built for your org*):
 
 ---
 
+# PHASE 4B — Publishing when the network is locked down
+
+> **Why Phase 4's one-click publish sometimes doesn't work.** The **Publish → Teams & M365
+> Copilot** button in Phase 4 only succeeds when the Foundry project has **public network
+> access enabled**. Microsoft 365 **does not support private connectivity** to agents — Teams
+> and M365 Copilot can only call an agent whose **Activity Protocol** endpoint is *publicly
+> routable*. If your project is on a **locked-down private network** (VNet / Private Link,
+> `publicNetworkAccess = Disabled`), the portal one-click flow has no public route to reach,
+> so it fails.
+
+The fix is **not** to open your whole project to the internet. Instead you open a scoped,
+**source-IP-filtered public exception on only the Activity Protocol route** — filtered to
+Microsoft 365 / Azure Bot Service source IP ranges — while everything else (Responses, MCP,
+A2A, agent-management APIs, and the Foundry→Fabric data path) stays private. This is the
+`enable_m365_public_endpoint` setting, wired up through an Azure **Bot Service** that proxies
+Teams/Copilot messages to the private agent.
+
+This repo ships a Claude Code **skill** — `publish-agent-m365` — that automates the full
+5-step REST flow:
+
+1. Get the agent identity (`instance_identity.client_id`) + tenant ID.
+2. Create an **Azure Bot Service** (public network access disabled, Teams channel connected).
+3. **PATCH** the agent to set `activity.enable_m365_public_endpoint: true` *(auto-skipped if
+   the project already allows public access)*.
+4. **POST** the Microsoft 365 publish API.
+5. Verify in Teams / M365 Copilot.
+
+> The skill auto-detects the project's `publicNetworkAccess`: on a **public** project it skips
+> the PATCH (Phase 4's one-click path is enough); on a **locked-down** project it adds the
+> scoped exception so publishing succeeds.
+
+## How the source-IP filtering is handled
+
+A common question: *"if a public route is opened, who restricts it to Microsoft 365?"* The filtering
+is **service-managed by the Foundry platform** — you don't configure or maintain any IP allowlist,
+and there's nothing to set in the bicep, the script, an NSG, or your VNet. You flip a single boolean
+(`activity.enable_m365_public_endpoint: true`) and Foundry does the rest:
+
+- Foundry applies a network exception **scoped to only the Activity Protocol route**. Per Microsoft's
+  docs: *"Service-managed source IP filtering allows requests delivered through Azure Bot Service or
+  Microsoft 365 infrastructure and blocks requests from other public networks."*
+- The allowed source ranges (Azure Bot Service / M365 channel infrastructure) are **maintained by
+  Microsoft**, not by you.
+- Filtering is **reachability, not identity** — defense-in-depth only. Every request must *still* pass
+  **Bot Service token validation + `Entra`/`BotServiceRbac`/`BotServiceTenant`** auth; absent or
+  spoofed source IPs fail closed.
+- The exception is **inbound-only and route-only** — the Foundry account's `publicNetworkAccess`, the
+  Responses/MCP/A2A/management APIs, and the Foundry→Fabric Private Link data path are all untouched.
+- The **Azure Bot Service** (created with `publicNetworkAccess: Disabled`) is the trusted proxy that
+  relays each Teams/Copilot message to the private agent endpoint.
+
+📖 [Allow Microsoft 365 traffic to a private-network agent](https://learn.microsoft.com/azure/foundry/agents/how-to/configure-agent#allow-microsoft-365-traffic-to-a-private-network-agent)
+
+## Installing the skill in Claude Code
+
+The skill lives in this repo at `.claude/skills/publish-agent-m365/`:
+
+```
+.claude/skills/publish-agent-m365/
+├── SKILL.md                        # what Claude reads to run the flow
+└── scripts/
+    ├── publish_agent_m365.py       # automates the 5-step REST publish
+    └── bot_service.bicep           # Azure Bot Service (PNA disabled + Teams channel)
+```
+
+**Option A — project scope (recommended, travels with this repo):** it's already here. Because
+it sits under `.claude/skills/`, Claude Code discovers it automatically whenever you run Claude
+from this repo. Nothing to install — just restart Claude Code so it re-scans the skills folder.
+
+**Option B — personal scope (all your repos):** copy the folder into your home skills directory:
+
+```powershell
+Copy-Item -Recurse -Force `
+  ".claude\skills\publish-agent-m365" `
+  "$env:USERPROFILE\.claude\skills\publish-agent-m365"
+```
+
+**Claude desktop app:** **Settings → Skills → Add** and upload
+`.claude/skills/publish-agent-m365/SKILL.md`.
+
+Confirm Claude picked it up, then just prompt it — e.g. *"Publish my Foundry agent to Teams
+and M365"* — and the skill drives the flow.
+
+### Before you run it
+
+- **Roles:** `Foundry User` on the project **+** `Azure Bot Service Contributor` (or
+  Contributor/Owner) on the resource group.
+- **Run from inside the VNet** (VM / VPN / ExpressRoute) — the management REST calls stay private.
+- Register the provider and sign in:
+  ```bash
+  az provider register --namespace Microsoft.BotService
+  az login
+  pip install azure-identity requests
+  ```
+- Target a **persistent, published** agent version (stable name/version), not an ephemeral test one.
+
+### Running the script directly
+
+The script prompts interactively for every value (endpoint, resource group, agent, scope,
+metadata) and lists the project's agents so you can pick one:
+
+```bash
+# See current M365 config + whether a Bot Service already exists (no changes)
+python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --check-bot
+
+# Print every request without mutating anything
+python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py --dry-run
+
+# Publish
+python .claude/skills/publish-agent-m365/scripts/publish_agent_m365.py
+```
+
+> **Scope ↔ auth must match:** `Shared`/`Personal` → `BotServiceRbac` (you only, share by link,
+> no admin approval); `Tenant` → `BotServiceTenant` (whole tenant, after M365 admin approval).
+> The script sets the scheme automatically from the publish scope.
+
+📖 [Publish agents to M365 & Teams via REST](https://learn.microsoft.com/azure/foundry/agents/how-to/publish-copilot-virtual-network?view=foundry)
+· [Allow M365 traffic to a private-network agent](https://learn.microsoft.com/azure/foundry/agents/how-to/configure-agent#allow-microsoft-365-traffic-to-a-private-network-agent)
+
+---
+
 ## Docker — not required
 
 The hosted-agent deploy uses a **remote build**: your code is uploaded and **Foundry builds
@@ -289,6 +410,13 @@ Only install Docker if you deliberately need a local container build.
 - [ ] M365 admin approves under **Agents → Requests**
 - [ ] Users **Add** it in Teams/Copilot
 
+**Phase 4B — publish on a locked-down network (if the one-click fails)**
+- [ ] Skill installed (`.claude/skills/publish-agent-m365/` — auto for Claude Code CLI in this repo)
+- [ ] `Foundry User` + `Azure Bot Service Contributor` roles held
+- [ ] `az provider register --namespace Microsoft.BotService` + `az login`, running **inside the VNet**
+- [ ] Prompt Claude: *"Publish my Foundry agent to Teams and M365"* (or run `publish_agent_m365.py`)
+- [ ] Agent reachable via the **source-IP-filtered Activity Protocol** exception; data path stays private
+
 ### Key links
 - RBAC: https://learn.microsoft.com/azure/foundry/concepts/rbac-foundry
 - Deploy a model: https://learn.microsoft.com/azure/ai-foundry/how-to/deploy-models-openai
@@ -297,3 +425,5 @@ Only install Docker if you deliberately need a local container build.
 - Hosted agent quickstart: https://aka.ms/foundry-agent-quickstart
 - Configure Claude Code for Foundry: https://learn.microsoft.com/azure/foundry/foundry-models/how-to/configure-claude-code
 - Hosted agents concept: https://learn.microsoft.com/azure/ai-foundry/agents/concepts/hosted-agents?view=foundry
+- Publish to M365/Teams on a private network (REST): https://learn.microsoft.com/azure/foundry/agents/how-to/publish-copilot-virtual-network?view=foundry
+- Allow M365 traffic to a private-network agent: https://learn.microsoft.com/azure/foundry/agents/how-to/configure-agent#allow-microsoft-365-traffic-to-a-private-network-agent
